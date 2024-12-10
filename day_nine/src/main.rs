@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FileNode {
     id: usize,
     size: i32,
@@ -25,72 +25,151 @@ impl fmt::Display for FileNode {
     }
 }
 
-fn find_first_free_space(positions: &[BlockPosition], total_length: usize) -> usize {
-    if positions.is_empty() {
-        return 0;
-    }
-
-    let mut occupied_spaces: Vec<bool> = vec![false; total_length];
-    for pos in positions {
-        for i in pos.start..(pos.start + pos.length) {
-            occupied_spaces[i] = true;
-        }
-    }
-
-    for i in 0..total_length {
-        if !occupied_spaces[i] {
-            return i;
-        }
-    }
-    total_length
-}
-
 fn compact_blocks(original_nodes: HashMap<usize, FileNode>) -> Vec<BlockPosition> {
+    let mut layout = Vec::new();
     let mut positions = Vec::new();
-    let mut current_pos = 0;
 
-    // Process blocks in order (0 to 9)
-    for id in 0..=9 {
+    let max_id = *original_nodes.keys().max().unwrap_or(&0);
+
+    for id in 0..=max_id {
         if let Some(node) = original_nodes.get(&id) {
+            let start = layout.len();
+            for _ in 0..node.size {
+                layout.push(Some(id));
+            }
             positions.push(BlockPosition {
                 id,
-                start: current_pos,
+                start,
                 length: node.size as usize,
             });
-            current_pos += node.size as usize;
+            for _ in 0..node.free_size {
+                layout.push(None);
+            }
         }
     }
 
-    // Now we have the initial layout, let's compact from right to left
-    let mut compacted: Vec<BlockPosition> = Vec::new();
-    for i in (0..positions.len()).rev() {
-        let block = &positions[i];
+    let mut result = Vec::new();
 
-        // Find leftmost available space
-        let mut start_pos = 0;
-        'outer: loop {
-            // Check if this position is available
-            for existing in &compacted {
-                if (start_pos + block.length > existing.start
-                    && start_pos < existing.start + existing.length)
-                    || (existing.start > start_pos && existing.start < start_pos + block.length)
-                {
-                    start_pos = existing.start + existing.length;
-                    continue 'outer;
+    for id in (0..=max_id).rev() {
+        if let Some(node) = original_nodes.get(&id) {
+            let mut orig_start = None;
+            for i in 0..layout.len() {
+                if layout[i] == Some(id) {
+                    if orig_start.is_none() {
+                        orig_start = Some(i);
+                    }
+                    layout[i] = None;
                 }
             }
-            break;
-        }
 
-        compacted.push(BlockPosition {
-            id: block.id,
-            start: start_pos,
-            length: block.length,
-        });
+            let mut blocks_to_place = node.size as usize;
+
+            let mut pos = 0;
+            while blocks_to_place > 0 {
+                while pos < layout.len() && layout[pos].is_some() {
+                    pos += 1;
+                }
+
+                if pos >= layout.len() {
+                    break;
+                }
+                let mut free_count = 0;
+                let start_pos = pos;
+                while pos < layout.len() && layout[pos].is_none() {
+                    free_count += 1;
+                    pos += 1;
+                }
+                let blocks_to_place_here = blocks_to_place.min(free_count);
+                if blocks_to_place_here > 0 {
+                    for i in start_pos..start_pos + blocks_to_place_here {
+                        layout[i] = Some(id);
+                    }
+                    result.push(BlockPosition {
+                        id,
+                        start: start_pos,
+                        length: blocks_to_place_here,
+                    });
+
+                    blocks_to_place -= blocks_to_place_here;
+                }
+            }
+        }
     }
 
-    compacted.sort_by_key(|pos| pos.start);
-    compacted
+    result.sort_by_key(|b| b.start);
+    result
+}
+
+fn compact_blocks_no_split(original_nodes: HashMap<usize, FileNode>) -> Vec<BlockPosition> {
+    let mut layout = Vec::new();
+    let mut positions = Vec::new();
+    let max_id = *original_nodes.keys().max().unwrap_or(&0);
+
+    for id in 0..=max_id {
+        if let Some(node) = original_nodes.get(&id) {
+            let start = layout.len();
+
+            for _ in 0..node.size {
+                layout.push(Some(id));
+            }
+
+            positions.push(BlockPosition {
+                id,
+                start,
+                length: node.size as usize,
+            });
+
+            for _ in 0..node.free_size {
+                layout.push(None);
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+
+    for id in (0..=max_id).rev() {
+        if let Some(node) = original_nodes.get(&id) {
+            let mut current_pos = 0;
+            while current_pos < layout.len() && layout[current_pos] != Some(id) {
+                current_pos += 1;
+            }
+
+            let mut best_pos = current_pos;
+
+            'outer: for try_pos in 0..current_pos {
+                if try_pos + node.size as usize > current_pos {
+                    break;
+                }
+
+                for i in 0..node.size as usize {
+                    if layout[try_pos + i].is_some() {
+                        continue 'outer;
+                    }
+                }
+
+                best_pos = try_pos;
+                break;
+            }
+            if best_pos != current_pos {
+                for i in 0..node.size as usize {
+                    layout[current_pos + i] = None;
+                }
+
+                for i in 0..node.size as usize {
+                    layout[best_pos + i] = Some(id);
+                }
+            }
+
+            result.push(BlockPosition {
+                id,
+                start: best_pos,
+                length: node.size as usize,
+            });
+        }
+    }
+
+    result.sort_by_key(|b| b.start);
+    result
 }
 
 fn checksum(compacted: &[BlockPosition]) -> i64 {
@@ -104,13 +183,8 @@ fn checksum(compacted: &[BlockPosition]) -> i64 {
         .sum()
 }
 
-fn main() {
-    let file = File::open("input.txt").unwrap();
-    let reader = BufReader::new(file);
-    let line = reader.lines().next().unwrap().unwrap();
-
-    let pairs: Vec<FileNode> = line
-        .chars()
+fn line_to_pairs(line: String) -> Vec<FileNode> {
+    line.chars()
         .collect::<Vec<char>>()
         .chunks(2)
         .enumerate()
@@ -127,12 +201,22 @@ fn main() {
                 free_size,
             }
         })
-        .collect();
+        .collect()
+}
+
+fn main() {
+    let file = File::open("input.txt").unwrap();
+    let reader = BufReader::new(file);
+    let line = reader.lines().next().unwrap().unwrap();
+    let pairs = line_to_pairs(line);
 
     let fs: HashMap<usize, FileNode> = pairs.into_iter().map(|node| (node.id, node)).collect();
-    let compacted = compact_blocks(fs);
-    let checksum = checksum(&compacted);
-    println!("Checksum: {}", checksum);
+    let compacted = compact_blocks(fs.clone());
+    let checksum_split = checksum(&compacted);
+    println!("Checksum: {}", checksum_split);
+    let compacted_no_split = compact_blocks_no_split(fs.clone());
+    let checksum_no_split = checksum(&compacted_no_split);
+    println!("Checksum without splitting: {}", checksum_no_split);
 }
 
 #[cfg(test)]
@@ -141,53 +225,32 @@ mod tests {
 
     #[test]
     fn test_full_compaction_and_checksum() {
-        let input = "2333133121414131402";
+        let input = String::from("2333133121414131402");
 
-        let pairs: Vec<FileNode> = input
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(2)
-            .enumerate()
-            .map(|(id, chunk)| {
-                let size = chunk[0].to_digit(10).unwrap() as i32;
-                let free_size = if chunk.len() > 1 {
-                    chunk[1].to_digit(10).unwrap() as i32
-                } else {
-                    0
-                };
-                println!(
-                    "Created FileNode: id={}, size={}, free_size={}",
-                    id, size, free_size
-                );
-                FileNode {
-                    id,
-                    size,
-                    free_size,
-                }
-            })
-            .collect();
+        let pairs = line_to_pairs(input);
 
         let original_nodes: HashMap<usize, FileNode> =
             pairs.into_iter().map(|node| (node.id, node)).collect();
 
         let compacted = compact_blocks(original_nodes);
 
-        println!("\nCompacted blocks:");
-        for block in &compacted {
-            println!(
-                "Block: id={}, start={}, length={}",
-                block.id, block.start, block.length
-            );
-        }
-
         let checksum = checksum(&compacted);
-        println!("\nChecksum calculation:");
-        for block in compacted.iter() {
-            for pos in block.start..block.start + block.length {
-                println!("Position {} * ID {} = {}", pos, block.id, pos * block.id);
-            }
-        }
 
         assert_eq!(checksum, 1928);
+    }
+
+    #[test]
+    fn test_full_compaction_no_split_and_checksum() {
+        let input = String::from("2333133121414131402");
+
+        let pairs = line_to_pairs(input);
+
+        let original_nodes: HashMap<usize, FileNode> =
+            pairs.into_iter().map(|node| (node.id, node)).collect();
+
+        let compacted = compact_blocks_no_split(original_nodes);
+
+        let checksum = checksum(&compacted);
+        assert_eq!(checksum, 2858);
     }
 }
