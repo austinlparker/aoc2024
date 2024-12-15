@@ -1,0 +1,13 @@
+[package]
+name = "day_fourteen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = "0.22.1"
+futures = "0.3.31"
+ggez = "0.9.3"
+image = "0.25.5"
+reqwest = { version = "0.12.9", features = ["json", "stream"] }
+serde_json = "1.0.133"
+tokio = { version = "1.42.0", features = ["full"] }
