@@ -59,15 +59,6 @@ impl Grid {
         }
         None
     }
-
-    fn print(&self) {
-        for row in &self.cells {
-            for cell in row {
-                print!("{}", if *cell { '#' } else { '.' });
-            }
-            println!();
-        }
-    }
 }
 
 fn main() {
@@ -108,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_maze_solution() {
-        let mut grid = Grid::new(7, 7); // 7x7 to accommodate coordinates up to 6
+        let mut grid = Grid::new(7, 7);
         let coordinates = vec![
             (5, 4),
             (4, 2),
@@ -126,7 +117,6 @@ mod tests {
 
         grid.set_coordinates(&coordinates);
         println!("Test maze layout:");
-        grid.print();
 
         let path = grid.find_path().expect("Should find a path");
         println!("Path found: {:?}", path);
